@@ -1,0 +1,210 @@
+---
+title: "00_eda"
+author: "Olga"
+date: "10/17/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(ggplot2)
+library(kableExtra)
+library(dplyr)
+library(stringr)
+```
+# train.csv and submission.csv
+```{r}
+train <- fread("train/train.csv")
+submission <- fread("sample_submission.csv")
+```
+
+Train size is `r dim(train)`
+
+Balanced classes:
+
+- Number of 1's in train `r sum(train$target)` (`r round(100*mean(train$target))`%).
+- Number of 0's in train `r sum(!train$target)` (`r round(100*mean(!train$target))`%).
+
+
+
+Number of unique phone_id's in train  `r uniqueN(train$phone_id)`
+
+Number of unique phone_id's in submission  `r uniqueN(submission$Id)`
+
+Number of unique phone_id's in submission  which are in train `r sum(submission$Id %in% train$phone_id)`
+
+For `r sum(!(submission$Id %in% train$phone_id))` clients there is no info in the train  dataset.
+
+
+```{r}
+records_per_phone <- train[, .N, by = phone_id]
+ggplot(records_per_phone, aes(x=N)) + geom_histogram() + 
+  ggtitle('Distribution of number of entries per phone ids')
+```
+
+
+```{r}
+records_per_month <- train[, .N, by = order_completed_at ]
+ggplot(records_per_month, aes(x=order_completed_at, y=N)) + 
+  geom_bar(stat = "identity") +
+  ggtitle("Number of records per month")
+```
+# shipments
+
+Add phone_id to shipments
+```{r}
+shipments_1 <- fread("shipments/shipments2020-01-01.csv", encoding = 'UTF-8')
+shipments_2 <- fread("shipments/shipments2020-03-01.csv", encoding = 'UTF-8')
+shipments_3 <- fread("shipments/shipments2020-04-30.csv", encoding = 'UTF-8')
+shipments_4 <- fread("shipments/shipments2020-06-29.csv", encoding = 'UTF-8')
+addresses <- fread("misc/addresses.csv")
+
+all_shipments <- rbind(shipments_1, shipments_2, shipments_3, shipments_4)
+remove( list = c('shipments_1', 'shipments_2', 'shipments_3', 'shipments_4'))
+
+
+sum(unique(all_shipments$user_id) %in% unique(train$phone_id))
+
+user_id_ship_address_id = unique(all_shipments[, list(user_id, ship_address_id)])
+#addresses$ship_address_id <- addresses$id
+#addresses[, id := NULL]
+
+
+uniqueN(train$phone_id)
+uniqueN(addresses$phone_id)
+sum(unique(train$phone_id) %in% unique(addresses$phone_id))
+sum(unique(submission$Id) %in% unique(addresses$phone_id))
+
+setkey(all_shipments, ship_address_id)
+setkey(addresses, id)
+all_shipments_phone <- merge(all_shipments, addresses, by.x = 'ship_address_id',
+                             by.y =  'id', all.x = TRUE)
+```
+
+
+Number of shipments per phone_id
+
+
+
+```{r}
+all_shipments_phone[, .N, by = phone_id] %>%
+  ggplot(aes(x=N)) + geom_histogram(bins = 20) + 
+  scale_x_log10() +
+  scale_y_log10() +
+  ggtitle('Distribution of number of shipments per phone id')
+```
+
+```{r}
+table(all_shipments_phone[, .N, by = phone_id]$N)
+```
+
+## Retailers
+
+
+```{r}
+N <- 10
+barplot(rev(sort(table(all_shipments$retailer)))[1:N], horiz = TRUE,las=1,
+        main = paste0('Top ', N,  ' retailers'))
+```
+
+## Cities
+
+```{r}
+barplot(rev(sort(table(all_shipments$s.city_name)))[1:N], horiz = TRUE,las=1,
+        main = paste0('Top ', N,  ' Cities'))
+
+```
+
+# Generate sex, age features
+
+```{r}
+all_phone_ids = unique(c(train$phone_id, submission$Id))
+
+ids <- data.frame(phone_id = all_phone_ids)
+setDT(ids)
+ids <- merge(ids, addresses, by.x = 'phone_id', by.y = 'phone_id', all.x = TRUE)
+ids$ship_address_id  <- ids$id
+ids[, id := NULL]
+
+ids <- merge(ids, all_shipments[, list(ship_address_id, user_id) ], by= 'ship_address_id', all.x = TRUE)
+fwrite(ids, '01_preprocessed_data/user_id__phone_id__ship_address_id.csv')
+
+user_profiles <- fread( 'misc/user_profiles.csv' )
+ids[, ship_address_id := NULL]
+ids <- unique(ids)
+ids <- merge(ids, user_profiles, by='user_id', all.x = TRUE)
+ids$age <-  as.numeric( as.Date("2020-01-01", "%Y-%m-%d") - as.Date(ids$bdate, "%Y-%m-%d") )/365
+ids[, bdate := NULL]
+fwrite(unique(ids), '01_preprocessed_data/user_id__phone_id__gender_age.csv')
+```
+
+
+# Prepare  train dataset
+
+```{r}
+ids_not_in_train <- submission$Id[!(submission$Id %in% train$phone_id)]
+fwrite(data.frame(ids_not_in_train = ids_not_in_train),
+       '01_preprocessed_data/submission_phone_ids_not_in_train.csv')
+
+```
+
+```{r}
+
+train_v1 <- copy(train)
+train_v1$month <- str_replace( train_v1$order_completed_at, "2020-", "")
+train_v1$month <- as.numeric(train_v1$month )
+
+train_v1_all <- train_v1
+train_v1 <- train_v1[month < 7]
+
+gender_age <- unique(ids[, list(phone_id, gender, age) ])
+gender_age <- gender_age[!is.na(gender)]
+gender_age <- gender_age[!is.na(age)]
+
+
+temp <-  train_v1[, list(months_with_order = sum(target),
+             months_without_order = sum(!target),
+             last_order_month = max(month*target),
+             first_order_month = min(month*target)), by = phone_id]
+
+phone_id_label  <- train[order_completed_at  == '2020-07', list(phone_id, target)]
+
+train_v1 <- merge(temp, phone_id_label, by = 'phone_id', all.x =  TRUE)
+
+
+train_v1 <- merge(train_v1, gender_age, by = 'phone_id', all.x =  TRUE)
+
+
+fwrite(train_v1, '01_preprocessed_data/train_v5.csv')
+
+```
+
+
+# Prepare submission 
+```{r}
+submission
+
+train_v1_all <- train_v1_all[, list(months_with_order = sum(target),
+             months_without_order = sum(!target),
+             last_order_month = max(month*target),
+             first_order_month = min(month*target)), by = phone_id]
+
+
+train_v1_all <- merge(train_v1_all, gender_age, by = 'phone_id', all.x =  TRUE)
+train_v1_all <- unique(train_v1_all)
+
+
+submission_feat <- merge(submission, train_v1_all, by.x = 'Id',  by.y = 'phone_id', all.x = TRUE)
+
+
+
+submission_feat <- submission_feat[!duplicated(Id)]
+
+submission_feat <- submission_feat[order(number)]
+submission_feat[, Predicted := NULL]
+submission_feat[, number := NULL]
+
+fwrite(submission_feat, '01_preprocessed_data/submission_features.csv')
+
+```
+
