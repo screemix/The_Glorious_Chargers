@@ -10,7 +10,7 @@ Result of NGWL hackathon
 **Ноутбуки, которые использовались в финальной сдаче проекта**
 
 
-*01generatefeaturesv1.Rmd* - генерирование фич для train и submission сетов
+*01_generate_features_v1.Rmd* - генерирование фич для train и submission сетов
 
 *TheGloriousChargersv2.ipynb* - модели и их предсказания
 
