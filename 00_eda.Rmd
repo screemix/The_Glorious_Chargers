@@ -31,7 +31,7 @@ Number of unique phone_id's in train  `r uniqueN(train$phone_id)`
 
 Number of unique phone_id's in submission  `r uniqueN(submission$Id)`
 
-Number of unique phone_id's in submission  which are in train `r sum(submission$Id %in% train$phone_id)`
+Number of unique phone_id's in submission  which are in train is `r sum(submission$Id %in% train$phone_id)`
 
 For `r sum(!(submission$Id %in% train$phone_id))` clients there is no info in the train  dataset.
 
@@ -77,6 +77,7 @@ sum(unique(submission$Id) %in% unique(addresses$phone_id))
 
 setkey(all_shipments, ship_address_id)
 setkey(addresses, id)
+addresses <- unique(addresses)
 all_shipments_phone <- merge(all_shipments, addresses, by.x = 'ship_address_id',
                              by.y =  'id', all.x = TRUE)
 ```
@@ -175,7 +176,6 @@ train_v1 <- merge(temp, phone_id_label, by = 'phone_id', all.x =  TRUE)
 train_v1 <- merge(train_v1, gender_age, by = 'phone_id', all.x =  TRUE)
 
 
-fwrite(train_v1, '01_preprocessed_data/train_v5.csv')
 
 ```
 
@@ -199,12 +199,42 @@ submission_feat <- merge(submission, train_v1_all, by.x = 'Id',  by.y = 'phone_i
 
 
 submission_feat <- submission_feat[!duplicated(Id)]
-
+submission_feat$number <- seq(1, nrow(submission_feat))
+  
+  
 submission_feat <- submission_feat[order(number)]
 submission_feat[, Predicted := NULL]
 submission_feat[, number := NULL]
 
+
+```
+
+
+
+```{r}
+number_shipments <- all_shipments_phone[, list(n_orders = .N), by = phone_id ]
+
+checks <- all_shipments_phone[, list(avg_check = mean(total_cost),
+                                               max_check = max(total_cost),
+                                               sum_spent = sum(total_cost),
+                                     last_check = total_cost[.N],
+                                     max_rate =  max(rate),
+                                     was_rate_1 =  1*any(rate == 1),
+                                     last_rate = rate[.N] ),
+                                        by = phone_id ]
+
+
+
+submission_feat <- merge(submission_feat, number_shipments, by.x = 'Id',  by.y = 'phone_id', all.x = TRUE)
+train_v1 <- merge(train_v1, number_shipments, by = 'phone_id', all.x =  TRUE)
+
+submission_feat <- merge(submission_feat, checks, by.x = 'Id',  by.y = 'phone_id', all.x = TRUE)
+train_v1 <- merge(train_v1, checks, by = 'phone_id', all.x =  TRUE)
+
+
+fwrite(train_v1, '01_preprocessed_data/train_v12.csv')
 fwrite(submission_feat, '01_preprocessed_data/submission_features.csv')
 
 ```
+
 
