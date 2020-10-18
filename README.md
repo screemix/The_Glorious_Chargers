@@ -8,5 +8,5 @@ Result of NGWL hackathon
 3. Ноутбуки с information retival - попытки получения инсайдов из данных
 
 # Ноутбуки, которые использовались в финальной сдаче проекта
-01_generate_features_v1.Rmd - generate features for trrain and submission sets 
-The_Glorious_Chargers_v2.ipynb - model and predictions
+01_generate_features_v1.Rmd - генерирование фич для train и submission сетов
+The_Glorious_Chargers_v2.ipynb - модели и их предсказания
