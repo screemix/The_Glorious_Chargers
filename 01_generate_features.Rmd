@@ -1,0 +1,235 @@
+---
+title: "01_generate features"
+author: "Olga"
+date: "10/17/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(ggplot2)
+library(kableExtra)
+library(dplyr)
+library(stringr)
+```
+# Read data 
+Read 
+
+- train.csv 
+- submission.csv
+- shipments
+- addresses,csv
+
+
+```{r}
+train <- fread("train/train.csv")
+submission <- fread("sample_submission.csv")
+shipments_1 <- fread("shipments/shipments2020-01-01.csv", encoding = 'UTF-8')
+shipments_2 <- fread("shipments/shipments2020-03-01.csv", encoding = 'UTF-8')
+shipments_3 <- fread("shipments/shipments2020-04-30.csv", encoding = 'UTF-8')
+shipments_4 <- fread("shipments/shipments2020-06-29.csv", encoding = 'UTF-8')
+addresses <- fread("misc/addresses.csv")
+user_profiles <- fread( 'misc/user_profiles.csv' )
+
+all_shipments <- rbind(shipments_1, shipments_2, shipments_3, shipments_4)
+remove( list = c('shipments_1', 'shipments_2', 'shipments_3', 'shipments_4'))
+
+
+user_id_ship_address_id = unique(all_shipments[, list(user_id, ship_address_id)])
+addresses <- unique(addresses)
+
+all_phone_ids = unique(c(train$phone_id, submission$Id))
+
+
+#delete unused phone ids from addresses 
+
+all_shipments_phone <- merge(all_shipments, addresses, by.x = 'ship_address_id',
+                             by.y =  'id', all.x = TRUE)
+all_shipments_phone <- all_shipments_phone[phone_id %in% all_phone_ids]
+```
+
+
+
+# Generate sex, age features
+
+```{r}
+
+ids <- data.frame(phone_id = all_phone_ids)
+setDT(ids)
+ids <- merge(ids, addresses, by.x = 'phone_id', by.y = 'phone_id', all.x = TRUE)
+ids$ship_address_id  <- ids$id
+ids[, id := NULL]
+
+ids <- merge(ids, all_shipments[, list(ship_address_id, user_id) ], by= 'ship_address_id', all.x = TRUE)
+fwrite(ids, '01_preprocessed_data/user_id__phone_id__ship_address_id.csv')
+
+ids[, ship_address_id := NULL]
+ids <- unique(ids)
+ids <- merge(ids, user_profiles, by='user_id', all.x = TRUE)
+ids$age <-  as.numeric( as.Date("2020-01-01", "%Y-%m-%d") - as.Date(ids$bdate, "%Y-%m-%d") )/365
+ids[, bdate := NULL]
+
+
+
+gender_age <- unique(ids[, list(phone_id, gender, age) ])
+gender_age <- gender_age[!is.na(gender)]
+gender_age <- gender_age[!is.na(age)]
+
+
+fwrite(unique(ids), '01_preprocessed_data/user_id__phone_id__gender_age.csv')
+```
+
+```{r}
+number_shipments_complete <- all_shipments_phone[s.order_state == 'complete', 
+                                                 list(n_orders_complete = .N), by = phone_id ]
+
+number_shipments_canceled <- all_shipments_phone[s.order_state == 'canceled', 
+                                                 list(n_orders_canceled = .N), by = phone_id ]
+
+checks <- all_shipments_phone[s.order_state == 'complete', list(avg_check = mean(total_cost),
+                                               max_check = max(total_cost),
+                                               sum_spent = sum(total_cost),
+                                     last_check = total_cost[.N],
+                                     max_rate =  max(rate),
+                                     was_rate_1 =  1*any(rate == 1),
+                                     last_rate = rate[.N] ),
+                                        by = phone_id ]
+
+
+
+
+```
+
+# Prepare  train dataset
+
+Do not use info from month 7 for feature caclculation
+Month 7 is the label
+
+
+```{r}
+missing_phone_id <- submission$Id[!(submission$Id %in% train$phone_id)]
+missing_shipments <- all_shipments_phone[phone_id %in% missing_phone_id]
+missing_shipments$month <- month(missing_shipments$order_completed_at)
+
+missing_train <- missing_shipments[s.order_state == 'complete', .N, by = list(phone_id, month) ]
+missing_train$month <- missing_train$month - 1
+missing_train$target <- 1
+missing_train[, N := NULL]
+
+missing_train <- rbind(missing_train, data.table(phone_id =c(40151, 40151), month = c(5, 6), target = c(0, 0)  ))
+
+
+#missing_train <-  missing_train[, list(months_with_order = sum(target),
+#             months_without_order = sum(!target),
+#             last_order_month = max(month*target),
+#             first_order_month = min(month*target)), by = phone_id]
+
+
+```
+
+
+```{r}
+train_v1 <- copy(train)
+train_v1$month <- str_replace( train_v1$order_completed_at, "2020-", "")
+train_v1$month <- as.numeric(train_v1$month )
+
+phone_id_label  <- train[order_completed_at  == '2020-07', list(phone_id, target)]
+train_v1 <- train_v1[month < 7]
+
+train_v1[, order_completed_at := NULL]
+train_v1 <- rbind(missing_train, train_v1)
+
+
+train_v1 <-  train_v1[, list(
+             months_with_order = sum(target),
+             months_without_order = sum(!target),
+             last_order_month = max(month*target),
+             first_order_month = min(month*target)), by = phone_id]
+
+
+
+train_v1 <- merge(train_v1, phone_id_label, by = 'phone_id', all.x =  TRUE)
+train_v1 <- merge(train_v1, gender_age, by = 'phone_id', all.x =  TRUE)
+train_v1 <- merge(train_v1, number_shipments_complete, by = 'phone_id', all.x =  TRUE)
+train_v1 <- merge(train_v1, number_shipments_canceled, by = 'phone_id', all.x =  TRUE)
+train_v1 <- merge(train_v1, checks, by = 'phone_id', all.x =  TRUE)
+
+
+```
+
+
+
+
+# Prepare submission 
+```{r}
+
+train_v1_all <- copy(train)
+train_v1_all$month <- str_replace( train_v1_all$order_completed_at, "2020-", "")
+train_v1_all$month <- as.numeric(train_v1_all$month )
+train_v1_all[, order_completed_at := NULL]
+
+train_v1_all <- rbind(missing_train, train_v1_all)
+
+train_v1_all <- train_v1_all[, list(months_with_order = sum(target),
+             months_without_order = sum(!target),
+             last_order_month = max(month*target),
+             first_order_month = min(month*target)), by = phone_id]
+
+
+
+train_v1_all <- merge(train_v1_all, phone_id_label, by = 'phone_id', all.x =  TRUE)
+train_v1_all <- merge(train_v1_all, gender_age, by = 'phone_id', all.x =  TRUE)
+train_v1_all <- merge(train_v1_all, number_shipments_complete, by = 'phone_id', all.x =  TRUE)
+train_v1_all <- merge(train_v1_all, number_shipments_canceled, by = 'phone_id', all.x =  TRUE)
+train_v1_all <- merge(train_v1_all, checks, by = 'phone_id', all.x =  TRUE)
+
+train_v1_all <- unique(train_v1_all)
+submission_feat <- merge(submission, train_v1_all, by.x = 'Id',  by.y = 'phone_id', all.x = TRUE)
+
+# sum phone ids are duplicated, take the first one
+submission_feat <- submission_feat[!duplicated(Id)]
+submission_feat$number <- seq(1, nrow(submission_feat))
+  
+  
+submission_feat <- submission_feat[order(number)]
+submission_feat[, Predicted := NULL]
+submission_feat[, number := NULL]
+
+
+```
+
+
+
+```{r}
+train_v1[is.na(gender)]$gender <- 'Third'
+submission_feat[is.na(gender)]$gender <- 'Third'
+train_v1[is.na(age)]$age <- 31
+submission_feat[is.na(age)]$age <- 31
+train_v1_all[is.na(gender)]$gender <- 'Third'
+train_v1_all[is.na(age)]$age <- 31
+
+
+fill_na <- function(DT) {
+  for (i in names(DT))
+    DT[is.na(get(i)), (i):=0]
+}
+
+fill_na(train_v1)
+fill_na(train_v1_all)
+fill_na(submission_feat)
+
+
+
+train_v1[rowSums(is.na(train_v1)) >0]
+
+submission_feat[, target := NULL]
+fwrite(train_v1, '01_preprocessed_data/train_v14.csv')
+fwrite(submission_feat, '01_preprocessed_data/submission_features.csv')
+fwrite(train_v1_all, '01_preprocessed_data/train_all_v14.csv')
+
+
+
+```
+
+
+
